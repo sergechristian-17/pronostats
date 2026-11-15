@@ -1,0 +1,26 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>PronoStats</title>
+<style>:root{color-scheme:light dark;--ac:#12a150}body{font:15px/1.45 system-ui,sans-serif;max-width:640px;margin:0 auto;padding:14px}
+.c{border:1px solid #8884;border-radius:14px;padding:12px;margin:10px 0}input,button{font:inherit;padding:10px;border-radius:10px;border:1px solid #8886;margin:4px 0;width:100%}
+button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}.b{display:flex;height:24px;border-radius:8px;overflow:hidden;color:#fff;font-size:12px}
+.b div{display:flex;align-items:center;justify-content:center}small{opacity:.7}</style></head><body>
+<h1>⚽ PronoStats</h1><div id="app"></div>
+<small>🔞 18+ · Aucun gain garanti. Jouer comporte des risques. Aide : 09 74 75 13 13.</small>
+<script>
+let T=localStorage.t||"",$=s=>document.querySelector(s);
+const call=async(u,b)=>{const r=await fetch(u,{method:b?"POST":"GET",headers:{"Content-Type":"application/json",Authorization:"Bearer "+T},body:b&&JSON.stringify(b)});
+const j=await r.json();if(!r.ok)throw j.error||"Erreur";return j};
+const pc=x=>Math.round(x*100)+"%";
+function login(){$("#app").innerHTML=`<div class=c><input id=e type=email placeholder="Email"><input id=p type=password placeholder="Mot de passe (8+)">
+<button onclick="go('login')">Se connecter</button><button onclick="go('register')">Créer un compte</button><small id=m></small></div>`}
+async function go(k){try{T=(await call("/api/"+k,{email:$("#e").value,password:$("#p").value})).token;localStorage.t=T;home()}catch(e){$("#m").textContent=e}}
+async function pay(p){location=(await call("/api/checkout",{plan:p})).url}
+async function home(){try{const me=await call("/api/me"),ps=await call("/api/predictions");
+$("#app").innerHTML=`<p>${me.email} · <b>${me.plan}</b> <a href="#" onclick="logout()">Déconnexion</a></p>`+
+(me.plan!="elite"?`<div class=c><button onclick="pay('pro')">Pro 9,99 €/mois</button><button onclick="pay('elite')">Élite 19,99 €/mois</button></div>`:"")+
+ps.map(m=>m.locked?`<div class=c><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`:`<div class=c><b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
+<div class=b><div style="width:${m.w*100}%;background:#2563eb">${pc(m.w)}</div><div style="width:${m.d*100}%;background:#6b7280">${pc(m.d)}</div><div style="width:${m.l*100}%;background:#dc2626">${pc(m.l)}</div></div>
+${m.o25!=null?`<br>+2,5 buts ${pc(m.o25)} · BTTS ${pc(m.btts)}`:""}${m.score?`<br>Score probable ${m.score} · Cotes justes ${m.odds.join(" / ")}`:""}</div>`).join("")}catch(e){login()}}
+function logout(){localStorage.t=T="";login()}
+T?home():login();
+</script></body></html>
