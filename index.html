@@ -14,13 +14,20 @@ const pc=x=>Math.round(x*100)+"%";
 function login(){$("#app").innerHTML=`<div class=c><input id=e type=email placeholder="Email"><input id=p type=password placeholder="Mot de passe (8+)">
 <button onclick="go('login')">Se connecter</button><button onclick="go('register')">Créer un compte</button><small id=m></small></div>`}
 async function go(k){try{T=(await call("/api/"+k,{email:$("#e").value,password:$("#p").value})).token;localStorage.t=T;home()}catch(e){$("#m").textContent=e}}
-async function pay(p){location=(await call("/api/checkout",{plan:p})).url}
-async function home(){try{const me=await call("/api/me"),ps=await call("/api/predictions");
-$("#app").innerHTML=`<p>${me.email} · <b>${me.plan}</b> <a href="#" onclick="logout()">Déconnexion</a></p>`+
-(me.plan!="elite"?`<div class=c><button onclick="pay('pro')">Pro 9,99 €/mois</button><button onclick="pay('elite')">Élite 19,99 €/mois</button></div>`:"")+
-ps.map(m=>m.locked?`<div class=c><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`:`<div class=c><b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
+async function pay(p){try{location=(await call("/api/checkout",{plan:p})).url}catch(e){alert(e)}}
+async function home(){
+  try{
+    const me=await call("/api/me");
+    let ps=[];
+    try{ ps=await call("/api/predictions"); }catch(e){ ps=[]; }
+    $("#app").innerHTML=`<p>${me.email} · <b>${me.plan}</b> <a href="#" onclick="logout()">Déconnexion</a></p>`+
+    (me.plan!="elite"?`<div class=c><button onclick="pay('pro')">Pro 9,99 €/mois</button><button onclick="pay('elite')">Élite 19,99 €/mois</button></div>`:"")+
+    (ps.length===0?`<div class=c>Aucun match à venir pour le moment.<br><small>Les pronostics apparaîtront dès que des matchs seront programmés.</small></div>`:
+    ps.map(m=>m.locked?`<div class=c><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`:`<div class=c><b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
 <div class=b><div style="width:${m.w*100}%;background:#2563eb">${pc(m.w)}</div><div style="width:${m.d*100}%;background:#6b7280">${pc(m.d)}</div><div style="width:${m.l*100}%;background:#dc2626">${pc(m.l)}</div></div>
-${m.o25!=null?`<br>+2,5 buts ${pc(m.o25)} · BTTS ${pc(m.btts)}`:""}${m.score?`<br>Score probable ${m.score} · Cotes justes ${m.odds.join(" / ")}`:""}</div>`).join("")}catch(e){login()}}
+${m.o25!=null?`<br>+2,5 buts ${pc(m.o25)} · BTTS ${pc(m.btts)}`:""}${m.score?`<br>Score probable ${m.score} · Cotes justes ${m.odds.join(" / ")}`:""}</div>`).join(""));
+  }catch(e){login()}
+}
 function logout(){localStorage.t=T="";login()}
 T?home():login();
 </script></body></html>
