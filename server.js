@@ -15,6 +15,9 @@ let db = loadDB();
 
 const app = express(), RANK = { free: 0, pro: 1, elite: 2 };
 
+// Liste des compétitions (gratuite sur football-data.org)
+const COMPETITIONS = ["FL1", "PL", "PD", "SA", "BL1", "CL"];
+
 // Stripe webhook
 app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) => {
   let ev;
@@ -94,10 +97,10 @@ app.post("/api/portal", auth, async (req, res) => {
   res.json({ url: s.url });
 });
 
-// Données + modèle de Poisson
-const api = p => fetch("https://api.football-data.org/v4/competitions/" + (E.COMPETITION || "FL1") + p,
+// ---------- Données multi-compétitions + modèle de Poisson ----------
+const api = (comp, p) => fetch("https://api.football-data.org/v4/competitions/" + comp + p,
   { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => {
-    if (!r.ok) throw new Error("API status " + r.status);
+    if (!r.ok) throw new Error("API " + comp + " status " + r.status);
     return r.json();
   });
 
@@ -113,32 +116,57 @@ function predict(lh, la) {
   return { w: w / s, d: d / s, l: l / s, o25: o / s, btts: b / s, score: best[0] + "-" + best[1] };
 }
 
+const COMP_NAMES = { FL1: "Ligue 1", PL: "Premier League", PD: "La Liga", SA: "Serie A", BL1: "Bundesliga", CL: "Champions League" };
+
 let cache = { t: 0, list: [] };
 async function matches() {
-  if (Date.now() - cache.t < 3600e3 && cache.list.length) return cache.list;
+  if (Date.now() - cache.t < 1800e3 && cache.list.length) return cache.list; // cache 30 min
   try {
-    const [st, fx] = await Promise.all([api("/standings"), api("/matches?status=SCHEDULED")]);
-    if (!st.standings || !st.standings[0] || !fx.matches) throw new Error("bad data");
-    const table = st.standings[0].table;
-    const G = table.reduce((a, t) => a + t.goalsFor, 0);
-    const N = table.reduce((a, t) => a + t.playedGames, 0) || 1;
-    const avg = G / N || 1.3;
-    const S = {};
-    table.forEach(t => {
-      if (t.playedGames > 0) {
-        S[t.team.id] = { att: t.goalsFor / t.playedGames / avg, def: t.goalsAgainst / t.playedGames / avg };
+    const all = [];
+    for (const comp of COMPETITIONS) {
+      try {
+        const [st, fx] = await Promise.all([
+          api(comp, "/standings"),
+          api(comp, "/matches?status=SCHEDULED")
+        ]);
+        if (!st.standings || !st.standings[0] || !fx.matches) continue;
+        const table = st.standings[0].table;
+        const G = table.reduce((a, t) => a + (t.goalsFor || 0), 0);
+        const N = table.reduce((a, t) => a + (t.playedGames || 0), 0) || 1;
+        const avg = G / N || 1.3;
+        const S = {};
+        table.forEach(t => {
+          if (t.playedGames > 0) {
+            S[t.team.id] = {
+              att: (t.goalsFor / t.playedGames) / avg,
+              def: (t.goalsAgainst / t.playedGames) / avg
+            };
+          }
+        });
+        const list = fx.matches
+          .filter(m => S[m.homeTeam.id] && S[m.awayTeam.id])
+          .slice(0, 6)
+          .map(m => {
+            const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
+            return {
+              home: m.homeTeam.name,
+              away: m.awayTeam.name,
+              date: m.utcDate,
+              competition: COMP_NAMES[comp] || comp,
+              ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def)
+            };
+          });
+        all.push(...list);
+      } catch (e) {
+        console.error("Erreur compétition", comp, e.message);
       }
-    });
-    const list = fx.matches.slice(0, 10).filter(m => S[m.homeTeam.id] && S[m.awayTeam.id]).map(m => {
-      const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
-      return { home: m.homeTeam.name, away: m.awayTeam.name, date: m.utcDate,
-        ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def) };
-    });
-    cache = { t: Date.now(), list };
-    return list;
+    }
+    // Trier par date
+    all.sort((a, b) => new Date(a.date) - new Date(b.date));
+    cache = { t: Date.now(), list: all.slice(0, 20) }; // max 20 matchs
+    return cache.list;
   } catch (e) {
     console.error("Football data error:", e.message);
-    // Retourne une liste vide plutôt que de planter
     return cache.list.length ? cache.list : [];
   }
 }
@@ -150,15 +178,15 @@ app.get("/api/predictions", auth, async (req, res) => {
     const odd = x => +(1 / x).toFixed(2);
     const list = await matches();
     res.json(list.map((m, i) => {
-      if (rk === 0 && i > 1) return { home: m.home, away: m.away, date: m.date, locked: true };
-      const o = { home: m.home, away: m.away, date: m.date, w: m.w, d: m.d, l: m.l };
+      if (rk === 0 && i > 1) return { home: m.home, away: m.away, date: m.date, competition: m.competition, locked: true };
+      const o = { home: m.home, away: m.away, date: m.date, competition: m.competition, w: m.w, d: m.d, l: m.l };
       if (rk >= 1) { o.o25 = m.o25; o.btts = m.btts; }
       if (rk >= 2) { o.score = m.score; o.odds = [odd(m.w), odd(m.d), odd(m.l)]; }
       return o;
     }));
   } catch (e) {
     console.error(e);
-    res.json([]); // Ne plante plus le frontend
+    res.json([]);
   }
 });
 
