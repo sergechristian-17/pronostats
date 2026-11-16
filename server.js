@@ -84,7 +84,7 @@ app.post("/api/checkout", auth, async (req, res) => {
       line_items: [{ price, quantity: 1 }],
       success_url: (E.BASE_URL || "") + "/?ok=1",
       cancel_url: (E.BASE_URL || "") + "/?cancel=1",
-      automatic_tax: { enabled: false }
+      managed_payments: { enabled: false }
     });
     res.json({ url: s.url });
   } catch (e) {
