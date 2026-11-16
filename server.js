@@ -32,7 +32,9 @@ app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) =
   res.json({ ok: true });
 });
 
-app.use(express.json(), express.static("public"));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 // ---------- Comptes ----------
 const token = u => jwt.sign({ id: u.id }, E.JWT_SECRET, { expiresIn: "30d" });
