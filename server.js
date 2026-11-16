@@ -33,8 +33,6 @@ app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) =
 });
 
 app.use(express.json());
-
-// Servir les fichiers à la racine + page d'accueil
 app.use(express.static(__dirname));
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
@@ -81,8 +79,8 @@ app.post("/api/checkout", auth, async (req, res) => {
       client_reference_id: String(req.user.id),
       metadata: { plan },
       line_items: [{ price, quantity: 1 }],
-      success_url: E.BASE_URL + "/?ok=1",
-      cancel_url: E.BASE_URL + "/?cancel=1"
+      success_url: (E.BASE_URL || "") + "/?ok=1",
+      cancel_url: (E.BASE_URL || "") + "/?cancel=1"
     });
     res.json({ url: s.url });
   } catch (e) {
@@ -92,13 +90,17 @@ app.post("/api/checkout", auth, async (req, res) => {
 
 app.post("/api/portal", auth, async (req, res) => {
   if (!req.user.customer) return res.status(400).json({ error: "Aucun abonnement" });
-  const s = await stripe.billingPortal.sessions.create({ customer: req.user.customer, return_url: E.BASE_URL });
+  const s = await stripe.billingPortal.sessions.create({ customer: req.user.customer, return_url: E.BASE_URL || "/" });
   res.json({ url: s.url });
 });
 
 // Données + modèle de Poisson
-const api = p => fetch("https://api.football-data.org/v4/competitions/" + E.COMPETITION + p,
-  { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => r.json());
+const api = p => fetch("https://api.football-data.org/v4/competitions/" + (E.COMPETITION || "FL1") + p,
+  { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => {
+    if (!r.ok) throw new Error("API status " + r.status);
+    return r.json();
+  });
+
 const pois = (l, k) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
 function predict(lh, la) {
   let w = 0, d = 0, l = 0, o = 0, b = 0, best = [0, 0, 0];
@@ -110,33 +112,54 @@ function predict(lh, la) {
   const s = w + d + l;
   return { w: w / s, d: d / s, l: l / s, o25: o / s, btts: b / s, score: best[0] + "-" + best[1] };
 }
+
 let cache = { t: 0, list: [] };
 async function matches() {
-  if (Date.now() - cache.t < 3600e3) return cache.list;
-  const [st, fx] = await Promise.all([api("/standings"), api("/matches?status=SCHEDULED")]);
-  const table = st.standings[0].table, G = table.reduce((a, t) => a + t.goalsFor, 0), N = table.reduce((a, t) => a + t.playedGames, 0);
-  const avg = G / N, S = {};
-  table.forEach(t => S[t.team.id] = { att: t.goalsFor / t.playedGames / avg, def: t.goalsAgainst / t.playedGames / avg });
-  const list = fx.matches.slice(0, 10).filter(m => S[m.homeTeam.id] && S[m.awayTeam.id]).map(m => {
-    const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
-    return { home: m.homeTeam.name, away: m.awayTeam.name, date: m.utcDate,
-      ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def) };
-  });
-  cache = { t: Date.now(), list }; return list;
+  if (Date.now() - cache.t < 3600e3 && cache.list.length) return cache.list;
+  try {
+    const [st, fx] = await Promise.all([api("/standings"), api("/matches?status=SCHEDULED")]);
+    if (!st.standings || !st.standings[0] || !fx.matches) throw new Error("bad data");
+    const table = st.standings[0].table;
+    const G = table.reduce((a, t) => a + t.goalsFor, 0);
+    const N = table.reduce((a, t) => a + t.playedGames, 0) || 1;
+    const avg = G / N || 1.3;
+    const S = {};
+    table.forEach(t => {
+      if (t.playedGames > 0) {
+        S[t.team.id] = { att: t.goalsFor / t.playedGames / avg, def: t.goalsAgainst / t.playedGames / avg };
+      }
+    });
+    const list = fx.matches.slice(0, 10).filter(m => S[m.homeTeam.id] && S[m.awayTeam.id]).map(m => {
+      const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
+      return { home: m.homeTeam.name, away: m.awayTeam.name, date: m.utcDate,
+        ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def) };
+    });
+    cache = { t: Date.now(), list };
+    return list;
+  } catch (e) {
+    console.error("Football data error:", e.message);
+    // Retourne une liste vide plutôt que de planter
+    return cache.list.length ? cache.list : [];
+  }
 }
 
-// Filtrage par abonnement
+// Filtrage par abonnement (logique inchangée)
 app.get("/api/predictions", auth, async (req, res) => {
   try {
-    const rk = RANK[req.user.plan], odd = x => +(1 / x).toFixed(2);
-    res.json((await matches()).map((m, i) => {
+    const rk = RANK[req.user.plan] || 0;
+    const odd = x => +(1 / x).toFixed(2);
+    const list = await matches();
+    res.json(list.map((m, i) => {
       if (rk === 0 && i > 1) return { home: m.home, away: m.away, date: m.date, locked: true };
       const o = { home: m.home, away: m.away, date: m.date, w: m.w, d: m.d, l: m.l };
       if (rk >= 1) { o.o25 = m.o25; o.btts = m.btts; }
       if (rk >= 2) { o.score = m.score; o.odds = [odd(m.w), odd(m.d), odd(m.l)]; }
       return o;
     }));
-  } catch (e) { res.status(502).json({ error: "Source de données indisponible" }); }
+  } catch (e) {
+    console.error(e);
+    res.json([]); // Ne plante plus le frontend
+  }
 });
 
 app.listen(E.PORT || 3000, () => console.log("PronoStats sur " + (E.BASE_URL || "http://localhost:3000")));
