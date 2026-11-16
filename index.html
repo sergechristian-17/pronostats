@@ -3,7 +3,8 @@
 <style>:root{color-scheme:light dark;--ac:#12a150}body{font:15px/1.45 system-ui,sans-serif;max-width:640px;margin:0 auto;padding:14px}
 .c{border:1px solid #8884;border-radius:14px;padding:12px;margin:10px 0}input,button{font:inherit;padding:10px;border-radius:10px;border:1px solid #8886;margin:4px 0;width:100%}
 button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}.b{display:flex;height:24px;border-radius:8px;overflow:hidden;color:#fff;font-size:12px}
-.b div{display:flex;align-items:center;justify-content:center}small{opacity:.7}</style></head><body>
+.b div{display:flex;align-items:center;justify-content:center}small{opacity:.7}
+.comp{font-size:12px;opacity:.7;margin-bottom:4px}</style></head><body>
 <h1>⚽ PronoStats</h1><div id="app"></div>
 <small>🔞 18+ · Aucun gain garanti. Jouer comporte des risques. Aide : 09 74 75 13 13.</small>
 <script>
@@ -23,7 +24,7 @@ async function home(){
     $("#app").innerHTML=`<p>${me.email} · <b>${me.plan}</b> <a href="#" onclick="logout()">Déconnexion</a></p>`+
     (me.plan!="elite"?`<div class=c><button onclick="pay('pro')">Pro 9,99 €/mois</button><button onclick="pay('elite')">Élite 19,99 €/mois</button></div>`:"")+
     (ps.length===0?`<div class=c>Aucun match à venir pour le moment.<br><small>Les pronostics apparaîtront dès que des matchs seront programmés.</small></div>`:
-    ps.map(m=>m.locked?`<div class=c><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`:`<div class=c><b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
+    ps.map(m=>m.locked?`<div class=c><div class=comp>${m.competition||""}</div><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`:`<div class=c><div class=comp>${m.competition||""}</div><b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
 <div class=b><div style="width:${m.w*100}%;background:#2563eb">${pc(m.w)}</div><div style="width:${m.d*100}%;background:#6b7280">${pc(m.d)}</div><div style="width:${m.l*100}%;background:#dc2626">${pc(m.l)}</div></div>
 ${m.o25!=null?`<br>+2,5 buts ${pc(m.o25)} · BTTS ${pc(m.btts)}`:""}${m.score?`<br>Score probable ${m.score} · Cotes justes ${m.odds.join(" / ")}`:""}</div>`).join(""));
   }catch(e){login()}
