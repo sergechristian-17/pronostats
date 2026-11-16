@@ -72,6 +72,18 @@ app.get("/api/me", auth, (req, res) => {
   res.json({ email: req.user.email, plan: req.user.plan });
 });
 
+// TEMPORAIRE - pour tester Pro/Élite (à supprimer plus tard)
+app.post("/api/force-elite", (req, res) => {
+  const { email, secret } = req.body || {};
+  if (secret !== "pronostats-test-2026") return res.status(403).json({ error: "Interdit" });
+  const u = db.users.find(x => x.email === (email || "").toLowerCase());
+  if (!u) return res.status(404).json({ error: "Compte introuvable. Crée d\'abord un compte." });
+  u.plan = "elite";
+  saveDB(db);
+  res.json({ ok: true, email: u.email, plan: u.plan });
+});
+
+
 app.post("/api/checkout", auth, async (req, res) => {
   const plan = req.body.plan === "elite" ? "elite" : "pro";
   const price = plan === "elite" ? E.STRIPE_PRICE_ELITE : E.STRIPE_PRICE_PRO;
