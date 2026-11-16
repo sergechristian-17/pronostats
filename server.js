@@ -83,7 +83,8 @@ app.post("/api/checkout", auth, async (req, res) => {
       metadata: { plan },
       line_items: [{ price, quantity: 1 }],
       success_url: (E.BASE_URL || "") + "/?ok=1",
-      cancel_url: (E.BASE_URL || "") + "/?cancel=1"
+      cancel_url: (E.BASE_URL || "") + "/?cancel=1",
+      automatic_tax: { enabled: false }
     });
     res.json({ url: s.url });
   } catch (e) {
