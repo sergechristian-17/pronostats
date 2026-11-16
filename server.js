@@ -4,7 +4,7 @@ const fs = require("fs"), path = require("path");
 const Stripe = require("stripe");
 const E = process.env, stripe = Stripe(E.STRIPE_SECRET_KEY);
 
-// Simple JSON file store instead of better-sqlite3 (same behavior, pure JS, works everywhere)
+// Simple JSON file store
 const DB_FILE = path.join(__dirname, "data.json");
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
@@ -15,7 +15,7 @@ let db = loadDB();
 
 const app = express(), RANK = { free: 0, pro: 1, elite: 2 };
 
-// ---------- Stripe webhook (corps brut, avant express.json) ----------
+// Stripe webhook
 app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) => {
   let ev;
   try { ev = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], E.STRIPE_WEBHOOK_SECRET); }
@@ -33,10 +33,12 @@ app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) =
 });
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// ---------- Comptes ----------
+// Servir les fichiers à la racine + page d'accueil
+app.use(express.static(__dirname));
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+// Comptes
 const token = u => jwt.sign({ id: u.id }, E.JWT_SECRET, { expiresIn: "30d" });
 const auth = (req, res, next) => {
   try {
@@ -94,7 +96,7 @@ app.post("/api/portal", auth, async (req, res) => {
   res.json({ url: s.url });
 });
 
-// ---------- Données + modèle de Poisson ----------
+// Données + modèle de Poisson
 const api = p => fetch("https://api.football-data.org/v4/competitions/" + E.COMPETITION + p,
   { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => r.json());
 const pois = (l, k) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
@@ -123,7 +125,7 @@ async function matches() {
   cache = { t: Date.now(), list }; return list;
 }
 
-// Filtrage par abonnement côté serveur : le client ne reçoit jamais ce qu'il n'a pas payé
+// Filtrage par abonnement
 app.get("/api/predictions", auth, async (req, res) => {
   try {
     const rk = RANK[req.user.plan], odd = x => +(1 / x).toFixed(2);
