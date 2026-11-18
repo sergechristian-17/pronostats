@@ -220,58 +220,98 @@ async function matches() {
   }
 }
 
-// Construction de coupons combinés (Élite) - scores exacts les plus fiables
+// Construction de coupons combinés (Élite)
 function buildCoupons(list) {
-  const candidates = [];
+  const coupons = [];
+
+  // ===== 1. Combinés SCORES EXACTS (les plus fiables) =====
+  const exactCandidates = [];
   list.forEach(m => {
     if (m.topScores && m.topScores[0]) {
-      candidates.push({
+      exactCandidates.push({
         match: m.home + " - " + m.away,
-        score: m.topScores[0].score,
+        pick: m.topScores[0].score,
         prob: m.topScores[0].prob,
-        odd: m.topScores[0].odd,
-        competition: m.competition
+        odd: m.topScores[0].odd
       });
     }
   });
-  // Trier par fiabilité (plus haute probabilité = plus fiable)
-  candidates.sort((a, b) => b.prob - a.prob);
-  const top = candidates.slice(0, 9);
+  exactCandidates.sort((a, b) => b.prob - a.prob);
+  const topExact = exactCandidates.slice(0, 9);
 
-  const coupons = [];
-
-  // Combiné de 2 scores exacts les plus fiables
-  if (top.length >= 2) {
-    const p = top.slice(0, 2);
-    const odd = +(p[0].odd * p[1].odd).toFixed(2);
+  if (topExact.length >= 2) {
+    const p = topExact.slice(0, 2);
     coupons.push({
-      label: "Combiné 2 scores exacts (les + fiables)",
-      odd,
-      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
+      label: "🎯 Combiné 2 scores exacts (les + fiables)",
+      odd: +(p[0].odd * p[1].odd).toFixed(2),
+      picks: p.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
+    });
+  }
+  if (topExact.length >= 3) {
+    const p = topExact.slice(0, 3);
+    coupons.push({
+      label: "🎯 Combiné 3 scores exacts (les + fiables)",
+      odd: +(p[0].odd * p[1].odd * p[2].odd).toFixed(2),
+      picks: p.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
     });
   }
 
-  // Combiné de 3 scores exacts les plus fiables
-  if (top.length >= 3) {
-    const p = top.slice(0, 3);
-    const odd = +(p[0].odd * p[1].odd * p[2].odd).toFixed(2);
-    coupons.push({
-      label: "Combiné 3 scores exacts (les + fiables)",
-      odd,
-      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
-    });
+  // ===== 2. Combinés MEILLEURS CHOIX DE MATCH (1X2) pour cotes ~2 / ~5 / ~10 =====
+  const resultCandidates = [];
+  list.forEach(m => {
+    // On prend le résultat le plus probable
+    let pickLabel, odd;
+    if (m.bestOutcome === "1") {
+      pickLabel = "1 (Victoire " + m.home + ")";
+      odd = +(1 / m.bestOutcomeProb).toFixed(2);
+    } else if (m.bestOutcome === "2") {
+      pickLabel = "2 (Victoire " + m.away + ")";
+      odd = +(1 / m.bestOutcomeProb).toFixed(2);
+    } else {
+      pickLabel = "N (Match nul)";
+      odd = +(1 / m.bestOutcomeProb).toFixed(2);
+    }
+    // On évite les cotes trop faibles (< 1.25) ou trop élevées pour les combinés
+    if (odd >= 1.25 && odd <= 3.5) {
+      resultCandidates.push({
+        match: m.home + " - " + m.away,
+        pick: pickLabel,
+        prob: m.bestOutcomeProb,
+        odd
+      });
+    }
+  });
+  // Trier par fiabilité
+  resultCandidates.sort((a, b) => b.prob - a.prob);
+  const topResults = resultCandidates.slice(0, 12);
+
+  function makeResultCombo(items, targetOdd, maxPicks) {
+    if (items.length < 2) return null;
+    let currentOdd = 1;
+    const picks = [];
+    for (const it of items) {
+      const newOdd = currentOdd * it.odd;
+      if (newOdd > targetOdd * 1.5 && picks.length >= 2) break;
+      currentOdd = newOdd;
+      picks.push(it);
+      if (picks.length >= maxPicks) break;
+    }
+    if (picks.length < 2) return null;
+    return {
+      label: "⭐ Combiné meilleurs choix (cible cote " + targetOdd + ")",
+      odd: +currentOdd.toFixed(2),
+      picks: picks.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
+    };
   }
 
-  // Autre combiné de 2 avec les suivants
-  if (top.length >= 4) {
-    const p = top.slice(2, 4);
-    const odd = +(p[0].odd * p[1].odd).toFixed(2);
-    coupons.push({
-      label: "Combiné 2 scores exacts (alternatif)",
-      odd,
-      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
-    });
-  }
+  const c2 = makeResultCombo(topResults, 2, 3);
+  if (c2) coupons.push(c2);
+
+  const c5 = makeResultCombo(topResults, 5, 4);
+  if (c5) coupons.push(c5);
+
+  const c10 = makeResultCombo(topResults, 10, 5);
+  if (c10) coupons.push(c10);
 
   return coupons;
 }
