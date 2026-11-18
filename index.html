@@ -70,7 +70,7 @@ async function home(){
       html+=`<h2 style="margin-top:24px">🔥 Coupons combinés</h2>`;
       coupons.forEach(c=>{
         html+=`<div class=coupon>
-          <h3>Combiné cote ≈ ${c.target} (réelle : ${c.odd})</h3>
+          <h3>${c.label || "Combiné"} — cote ${c.odd}</h3>
           <ul style="margin:0;padding-left:18px">${c.picks.map(p=>`<li>${p}</li>`).join("")}</ul>
         </div>`;
       });
