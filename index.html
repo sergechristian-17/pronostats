@@ -1,84 +1,199 @@
-<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>PronoStats</title>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PronoStats</title>
 <style>
-:root{color-scheme:light dark;--ac:#12a150}
-body{font:15px/1.45 system-ui,sans-serif;max-width:640px;margin:0 auto;padding:14px}
-.c{border:1px solid #8884;border-radius:14px;padding:14px;margin:12px 0}
-input,button{font:inherit;padding:10px;border-radius:10px;border:1px solid #8886;margin:4px 0;width:100%}
+:root{color-scheme:light dark;--ac:#12a150;--bg:#0f0f13;--card:#1a1a24;--border:#2a2a3a}
+*{box-sizing:border-box}
+body{font:15px/1.45 system-ui,sans-serif;max-width:640px;margin:0 auto;padding:14px;background:var(--bg);color:#eee}
+h1{font-size:1.5rem;margin:0 0 12px}
+.c{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin:12px 0}
+input,button{font:inherit;padding:11px;border-radius:10px;border:1px solid var(--border);margin:4px 0;width:100%;background:#111;color:#eee}
 button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}
-small{opacity:.7}
-.comp{font-size:12px;opacity:.7;margin-bottom:4px}
-.pred{font-size:18px;font-weight:700;margin:6px 0}
-.tag{display:inline-block;background:#12a15033;color:var(--ac);padding:3px 8px;border-radius:6px;font-size:13px;margin:2px 4px 2px 0}
-.locked{opacity:.7}
-.coupon{background:#1a1a2e;border-radius:12px;padding:12px;margin:8px 0}
-.coupon h3{margin:0 0 8px;font-size:15px}
-</style></head><body>
-<h1>⚽ PronoStats</h1><div id="app"></div>
-<small>🔞 18+ · Aucun gain garanti. Jouer comporte des risques. Aide : 09 74 75 13 13.</small>
+button.secondary{background:transparent;border:1px solid var(--ac);color:var(--ac)}
+small,.muted{opacity:.65;font-size:13px}
+.comp{font-size:12px;opacity:.6;margin-bottom:2px}
+.match-title{font-weight:700;font-size:16px;margin:2px 0 8px}
+.acc{border:1px solid var(--border);border-radius:10px;margin:8px 0;overflow:hidden}
+.acc-head{padding:10px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#14141c;user-select:none}
+.acc-head:hover{background:#1c1c28}
+.acc-body{display:none;padding:10px 12px;border-top:1px solid var(--border);font-size:14px}
+.acc.open .acc-body{display:block}
+.acc-head .arrow{transition:transform .2s}
+.acc.open .arrow{transform:rotate(90deg)}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #ffffff08}
+.row:last-child{border-bottom:0}
+.tag{display:inline-block;background:#12a15022;color:var(--ac);padding:2px 8px;border-radius:6px;font-size:12px;margin-right:4px}
+.locked-box{opacity:.55;text-align:center;padding:16px;border:1px dashed #444;border-radius:10px;margin:8px 0}
+.coupon-section{margin-top:20px}
+.coupon-section h2{font-size:1.1rem;margin:16px 0 8px}
+</style>
+</head>
+<body>
+<h1>⚽ PronoStats</h1>
+<div id="app"></div>
+<p class="muted" style="margin-top:20px">🔞 18+ · Aucun gain garanti. Jouer comporte des risques. Aide : 09 74 75 13 13.</p>
+
 <script>
-let T=localStorage.t||"",$=s=>document.querySelector(s);
-const call=async(u,b)=>{const r=await fetch(u,{method:b?"POST":"GET",headers:{"Content-Type":"application/json",Authorization:"Bearer "+T},body:b&&JSON.stringify(b)});
-const j=await r.json();if(!r.ok)throw j.error||"Erreur";return j};
-function login(){$("#app").innerHTML=`<div class=c><input id=e type=email placeholder="Email"><input id=p type=password placeholder="Mot de passe (8+)">
-<button onclick="go('login')">Se connecter</button><button onclick="go('register')">Créer un compte</button><small id=m></small></div>`}
-async function go(k){try{T=(await call("/api/"+k,{email:$("#e").value,password:$("#p").value})).token;localStorage.t=T;home()}catch(e){$("#m").textContent=e}}
-async function pay(p){try{location=(await call("/api/checkout",{plan:p})).url}catch(e){alert(e)}}
-async function home(){
-  try{
-    const me=await call("/api/me");
-    let data={matches:[]};
-    try{ data=await call("/api/predictions"); }catch(e){ data={matches:[]}; }
-    const ps=data.matches||[];
-    const coupons=data.coupons||[];
+let T = localStorage.t || "";
+const $ = s => document.querySelector(s);
+const call = async (u, b) => {
+  const r = await fetch(u, { method: b ? "POST" : "GET", headers: { "Content-Type": "application/json", Authorization: "Bearer " + T }, body: b && JSON.stringify(b) });
+  const j = await r.json();
+  if (!r.ok) throw j.error || "Erreur";
+  return j;
+};
+const pct = x => Math.round(x * 100) + "%";
 
-    let html=`<p>${me.email} · <b>${me.plan}</b> <a href="#" onclick="logout()">Déconnexion</a></p>`;
-    if(me.plan!=="elite"){
-      html+=`<div class=c><button onclick="pay('pro')">Pro 9,99 €/mois</button><button onclick="pay('elite')">Élite 19,99 €/mois</button></div>`;
-    }
-
-    if(ps.length===0){
-      html+=`<div class=c>Aucun match à venir pour le moment.</div>`;
-    } else {
-      ps.forEach(m=>{
-        if(m.locked){
-          html+=`<div class="c locked"><div class=comp>${m.competition||""}</div><b>${m.home} – ${m.away}</b><br>🔒 Abonnés Pro</div>`;
-        } else if(m.prediction){
-          // Gratuit
-          html+=`<div class=c><div class=comp>${m.competition||""}</div>
-            <b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
-            <div class=pred>${m.prediction} <small>(${m.confidence}%)</small></div>
-          </div>`;
-        } else {
-          // Pro / Elite
-          html+=`<div class=c><div class=comp>${m.competition||""}</div>
-            <b>${m.home} – ${m.away}</b> <small>${new Date(m.date).toLocaleString("fr")}</small>
-            <div style="margin-top:8px">
-              <span class=tag>🏆 ${m.winner} (${m.winnerProb}%)</span>
-              <span class=tag>⚽ Total buts ≈ ${m.totalGoals}</span>
-              <span class=tag>BTTS : ${m.btts} (${m.bttsProb}%)</span>
-              ${m.score?`<span class=tag>🎯 Score exact : ${m.score}</span>`:""}
-            </div>
-            ${m.topScores?`<div style="margin-top:6px;font-size:13px">Autres scores : ${m.topScores.map(s=>s.score+" ("+Math.round(s.prob*100)+"%)").join(" · ")}</div>`:""}
-          </div>`;
-        }
-      });
-    }
-
-    // Coupons Élite
-    if(coupons.length){
-      html+=`<h2 style="margin-top:24px">🔥 Coupons combinés</h2>`;
-      coupons.forEach(c=>{
-        html+=`<div class=coupon>
-          <h3>${c.label || "Combiné"} — cote ${c.odd}</h3>
-          <ul style="margin:0;padding-left:18px">${c.picks.map(p=>`<li>${p}</li>`).join("")}</ul>
-        </div>`;
-      });
-    }
-
-    $("#app").innerHTML=html;
-  }catch(e){login()}
+function login() {
+  $("#app").innerHTML = `<div class="c">
+    <input id="e" type="email" placeholder="Email">
+    <input id="p" type="password" placeholder="Mot de passe (8+)">
+    <button onclick="go('login')">Se connecter</button>
+    <button class="secondary" onclick="go('register')">Créer un compte</button>
+    <small id="m"></small>
+  </div>`;
 }
-function logout(){localStorage.t=T="";login()}
-T?home():login();
-</script></body></html>
+
+async function go(k) {
+  try {
+    T = (await call("/api/" + k, { email: $("#e").value, password: $("#p").value })).token;
+    localStorage.t = T;
+    home();
+  } catch (e) { $("#m").textContent = e; }
+}
+
+async function pay(p) {
+  try { location = (await call("/api/checkout", { plan: p })).url; }
+  catch (e) { alert(e); }
+}
+
+function acc(title, content, locked) {
+  if (locked) return `<div class="locked-box">🔒 ${title} — Réservé aux abonnés</div>`;
+  const id = Math.random().toString(36).slice(2, 8);
+  return `<div class="acc" id="a${id}">
+    <div class="acc-head" onclick="this.parentElement.classList.toggle('open')">
+      <span>${title}</span><span class="arrow">▶</span>
+    </div>
+    <div class="acc-body">${content}</div>
+  </div>`;
+}
+
+function renderMatch(m) {
+  if (m.locked) {
+    return `<div class="c">
+      <div class="comp">${m.competition || ""}</div>
+      <div class="match-title">${m.home} – ${m.away}</div>
+      <div class="locked-box">🔒 Abonnés Pro / Élite</div>
+    </div>`;
+  }
+
+  // 1X2
+  let oneXtwo = (m.outcomes || []).map(o =>
+    `<div class="row"><span>${o.label}</span><span>${pct(o.prob)}</span></div>`
+  ).join("");
+  if (m.doubleChance) {
+    oneXtwo += `<div style="margin-top:8px;font-size:12px;opacity:.7">Double chance</div>`;
+    oneXtwo += m.doubleChance.map(o =>
+      `<div class="row"><span>${o.label}</span><span>${pct(o.prob)}</span></div>`
+    ).join("");
+  }
+
+  // Totals
+  let totalsHtml = (m.totals || []).map(t =>
+    `<div class="row"><span>Plus de ${t.line}</span><span>${pct(t.over)}</span></div>
+     <div class="row"><span>Moins de ${t.line}</span><span>${pct(t.under)}</span></div>`
+  ).join("");
+  if (m.btts) {
+    totalsHtml += `<div style="margin-top:8px;font-size:12px;opacity:.7">Les deux équipes marquent</div>
+      <div class="row"><span>Oui</span><span>${pct(m.btts.yes)}</span></div>
+      <div class="row"><span>Non</span><span>${pct(m.btts.no)}</span></div>`;
+  }
+
+  // Score exact
+  let scoreHtml = "";
+  if (m.scoreLocked) {
+    scoreHtml = null; // will show locked
+  } else if (m.topScores) {
+    scoreHtml = m.topScores.map(s =>
+      `<div class="row"><span>${s.score}</span><span>${pct(s.prob)} · cote ${s.odd}</span></div>`
+    ).join("");
+  }
+
+  // HT/FT
+  let htftHtml = "";
+  if (m.htftLocked) {
+    htftHtml = null;
+  } else if (m.htft) {
+    htftHtml = m.htft.map(h =>
+      `<div class="row"><span>${h.key}</span><span>${pct(h.prob)}</span></div>`
+    ).join("");
+  }
+
+  return `<div class="c">
+    <div class="comp">${m.competition || ""} · ${new Date(m.date).toLocaleString("fr")}</div>
+    <div class="match-title">${m.home} – ${m.away}</div>
+    ${acc("1X2 / Double chance", oneXtwo)}
+    ${acc("Total de buts & BTTS", totalsHtml)}
+    ${acc("Score exact", scoreHtml, m.scoreLocked)}
+    ${acc("Mi-temps / Fin de match", htftHtml, m.htftLocked)}
+  </div>`;
+}
+
+function renderCoupons(c) {
+  if (!c) return "";
+  let html = `<div class="coupon-section"><h2>🔥 Coupons combinés</h2>`;
+
+  function block(title, arr) {
+    if (!arr || !arr.length) return acc(title, "<div class='muted'>Aucun combiné disponible pour le moment</div>");
+    const body = arr.map(x =>
+      `<div style="margin-bottom:10px">
+        <div><b>Cote totale : ${x.odd}</b></div>
+        <ul style="margin:4px 0;padding-left:18px">${x.picks.map(p => `<li>${p}</li>`).join("")}</ul>
+      </div>`
+    ).join("");
+    return acc(title, body);
+  }
+
+  html += block("Combinés Côte ≈ 2", c.cote2);
+  html += block("Combinés Côte ≈ 5", c.cote5);
+  html += block("Combinés Côte ≈ 10", c.cote10);
+  html += block("Combinés scores exacts les plus fiables", c.exact);
+  html += `</div>`;
+  return html;
+}
+
+async function home() {
+  try {
+    const me = await call("/api/me");
+    let data = { matches: [] };
+    try { data = await call("/api/predictions"); } catch (e) {}
+
+    let html = `<p>${me.email} · <b>${me.plan}</b> · <a href="#" onclick="logout();return false" style="color:var(--ac)">Déconnexion</a></p>`;
+
+    if (me.plan !== "elite") {
+      html += `<div class="c">
+        <button onclick="pay('pro')">Passer en Pro — 9,99 €/mois</button>
+        <button onclick="pay('elite')">Passer en Élite — 19,99 €/mois</button>
+      </div>`;
+    }
+
+    if (!data.matches || !data.matches.length) {
+      html += `<div class="c">Aucun match à venir pour le moment.</div>`;
+    } else {
+      data.matches.forEach(m => { html += renderMatch(m); });
+    }
+
+    if (data.coupons) html += renderCoupons(data.coupons);
+
+    $("#app").innerHTML = html;
+  } catch (e) { login(); }
+}
+
+function logout() { localStorage.t = T = ""; login(); }
+T ? home() : login();
+</script>
+</body>
+</html>
