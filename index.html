@@ -90,10 +90,17 @@ function renderMatch(m) {
     </div>`;
   }
 
-  // 1X2
-  let oneXtwo = (m.outcomes || []).map(o =>
-    `<div class="row"><span>${o.label}</span><span>${pct(o.prob)}</span></div>`
-  ).join("");
+  // 1X2 - highlight best prediction
+  let oneXtwo = "";
+  if (m.outcomes && m.outcomes.length) {
+    const best = m.outcomes[0];
+    oneXtwo += `<div style="margin-bottom:10px;padding:8px;background:#12a15022;border-radius:8px">
+      <b>Prédiction : ${best.label}</b> <span class="tag">${pct(best.prob)}</span>
+    </div>`;
+    oneXtwo += m.outcomes.map(o =>
+      `<div class="row"><span>${o.label}</span><span>${pct(o.prob)}</span></div>`
+    ).join("");
+  }
   if (m.doubleChance) {
     oneXtwo += `<div style="margin-top:8px;font-size:12px;opacity:.7">Double chance</div>`;
     oneXtwo += m.doubleChance.map(o =>
@@ -102,22 +109,36 @@ function renderMatch(m) {
   }
 
   // Totals
-  let totalsHtml = (m.totals || []).map(t =>
-    `<div class="row"><span>Plus de ${t.line}</span><span>${pct(t.over)}</span></div>
-     <div class="row"><span>Moins de ${t.line}</span><span>${pct(t.under)}</span></div>`
-  ).join("");
-  if (m.btts) {
-    totalsHtml += `<div style="margin-top:8px;font-size:12px;opacity:.7">Les deux équipes marquent</div>
-      <div class="row"><span>Oui</span><span>${pct(m.btts.yes)}</span></div>
-      <div class="row"><span>Non</span><span>${pct(m.btts.no)}</span></div>`;
+  let totalsHtml = "";
+  if (m.totalsLocked) {
+    totalsHtml = null;
+  } else {
+    totalsHtml = (m.totals || []).map(t =>
+      `<div class="row"><span>Plus de ${t.line}</span><span>${pct(t.over)}</span></div>
+       <div class="row"><span>Moins de ${t.line}</span><span>${pct(t.under)}</span></div>`
+    ).join("");
+    if (m.btts) {
+      const bestBtts = m.btts.yes >= m.btts.no ? "Oui" : "Non";
+      const bestBttsPct = m.btts.yes >= m.btts.no ? m.btts.yes : m.btts.no;
+      totalsHtml = `<div style="margin-bottom:10px;padding:8px;background:#12a15022;border-radius:8px">
+        <b>Prédiction BTTS : ${bestBtts}</b> <span class="tag">${pct(bestBttsPct)}</span>
+      </div>` + totalsHtml;
+      totalsHtml += `<div style="margin-top:8px;font-size:12px;opacity:.7">Les deux équipes marquent</div>
+        <div class="row"><span>Oui</span><span>${pct(m.btts.yes)}</span></div>
+        <div class="row"><span>Non</span><span>${pct(m.btts.no)}</span></div>`;
+    }
   }
 
   // Score exact
   let scoreHtml = "";
   if (m.scoreLocked) {
-    scoreHtml = null; // will show locked
+    scoreHtml = null;
   } else if (m.topScores) {
-    scoreHtml = m.topScores.map(s =>
+    const best = m.topScores[0];
+    scoreHtml = `<div style="margin-bottom:10px;padding:8px;background:#12a15022;border-radius:8px">
+      <b>Score exact le plus probable : ${best.score}</b> <span class="tag">${pct(best.prob)}</span>
+    </div>`;
+    scoreHtml += m.topScores.map(s =>
       `<div class="row"><span>${s.score}</span><span>${pct(s.prob)} · cote ${s.odd}</span></div>`
     ).join("");
   }
@@ -127,7 +148,11 @@ function renderMatch(m) {
   if (m.htftLocked) {
     htftHtml = null;
   } else if (m.htft) {
-    htftHtml = m.htft.map(h =>
+    const best = m.htft[0];
+    htftHtml = `<div style="margin-bottom:10px;padding:8px;background:#12a15022;border-radius:8px">
+      <b>Mi-temps/Fin le plus probable : ${best.key}</b> <span class="tag">${pct(best.prob)}</span>
+    </div>`;
+    htftHtml += m.htft.map(h =>
       `<div class="row"><span>${h.key}</span><span>${pct(h.prob)}</span></div>`
     ).join("");
   }
@@ -136,7 +161,7 @@ function renderMatch(m) {
     <div class="comp">${m.competition || ""} · ${new Date(m.date).toLocaleString("fr")}</div>
     <div class="match-title">${m.home} – ${m.away}</div>
     ${acc("1X2 / Double chance", oneXtwo)}
-    ${acc("Total de buts & BTTS", totalsHtml)}
+    ${acc("Total de buts & BTTS", totalsHtml, m.totalsLocked)}
     ${acc("Score exact", scoreHtml, m.scoreLocked)}
     ${acc("Mi-temps / Fin de match", htftHtml, m.htftLocked)}
   </div>`;
