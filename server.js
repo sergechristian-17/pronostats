@@ -283,16 +283,15 @@ app.get("/api/predictions", auth, async (req, res) => {
     const matchesOut = list.map((m, i) => {
       const base = { home: m.home, away: m.away, date: m.date, competition: m.competition };
 
-      // Free: only first match unlocked, others locked
+      // Free: only first match unlocked, and only 1X2 visible
       if (rk === 0) {
         if (i > 0) return { ...base, locked: true };
         return {
           ...base,
           outcomes: m.outcomes,
           doubleChance: m.doubleChance,
-          totals: m.totals,
-          btts: m.btts,
-          // score & htft locked for free
+          totalsLocked: true,
+          bttsLocked: true,
           scoreLocked: true,
           htftLocked: true
         };
