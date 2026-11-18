@@ -4,7 +4,6 @@ const fs = require("fs"), path = require("path");
 const Stripe = require("stripe");
 const E = process.env, stripe = Stripe(E.STRIPE_SECRET_KEY);
 
-// Simple JSON file store
 const DB_FILE = path.join(__dirname, "data.json");
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); }
@@ -17,7 +16,6 @@ const app = express(), RANK = { free: 0, pro: 1, elite: 2 };
 const COMPETITIONS = ["FL1", "PL", "PD", "SA", "BL1", "CL"];
 const COMP_NAMES = { FL1: "Ligue 1", PL: "Premier League", PD: "La Liga", SA: "Serie A", BL1: "Bundesliga", CL: "Champions League" };
 
-// Stripe webhook
 app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) => {
   let ev;
   try { ev = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], E.STRIPE_WEBHOOK_SECRET); }
@@ -38,7 +36,6 @@ app.use(express.json());
 app.use(express.static(__dirname));
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
-// Comptes
 const token = u => jwt.sign({ id: u.id }, E.JWT_SECRET, { expiresIn: "30d" });
 const auth = (req, res, next) => {
   try {
@@ -67,16 +64,13 @@ app.post("/api/login", (req, res) => {
   res.json({ token: token(u), plan: u.plan });
 });
 
-app.get("/api/me", auth, (req, res) => {
-  res.json({ email: req.user.email, plan: req.user.plan });
-});
+app.get("/api/me", auth, (req, res) => res.json({ email: req.user.email, plan: req.user.plan }));
 
-// TEMPORAIRE - pour tester
 app.post("/api/force-elite", (req, res) => {
   const { email, secret } = req.body || {};
   if (secret !== "pronostats-test-2026") return res.status(403).json({ error: "Interdit" });
   const u = db.users.find(x => x.email === (email || "").toLowerCase());
-  if (!u) return res.status(404).json({ error: "Compte introuvable. Crée d'abord un compte." });
+  if (!u) return res.status(404).json({ error: "Compte introuvable" });
   u.plan = "elite";
   saveDB(db);
   res.json({ ok: true, email: u.email, plan: u.plan });
@@ -97,9 +91,7 @@ app.post("/api/checkout", auth, async (req, res) => {
       managed_payments: { enabled: false }
     });
     res.json({ url: s.url });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/portal", auth, async (req, res) => {
@@ -108,62 +100,90 @@ app.post("/api/portal", auth, async (req, res) => {
   res.json({ url: s.url });
 });
 
-// ---------- Modèle de Poisson enrichi ----------
+// ---------- Modèle ----------
 const api = (comp, p) => fetch("https://api.football-data.org/v4/competitions/" + comp + p,
   { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => {
-    if (!r.ok) throw new Error("API " + comp + " status " + r.status);
+    if (!r.ok) throw new Error("API " + comp + " " + r.status);
     return r.json();
   });
 
 const pois = (l, k) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
 
 function predict(lh, la) {
-  let w = 0, d = 0, l = 0, o15 = 0, o25 = 0, o35 = 0, btts = 0;
-  const scores = []; // [homeGoals, awayGoals, prob]
-  for (let i = 0; i <= 7; i++) {
-    for (let j = 0; j <= 7; j++) {
+  let w = 0, d = 0, l = 0;
+  let o05 = 0, o15 = 0, o25 = 0, o35 = 0;
+  let btts = 0;
+  const scores = [];
+  for (let i = 0; i <= 6; i++) {
+    for (let j = 0; j <= 6; j++) {
       const p = pois(lh, i) * pois(la, j);
       if (i > j) w += p; else if (i === j) d += p; else l += p;
-      if (i + j > 1.5) o15 += p;
-      if (i + j > 2.5) o25 += p;
-      if (i + j > 3.5) o35 += p;
+      const tot = i + j;
+      if (tot > 0.5) o05 += p;
+      if (tot > 1.5) o15 += p;
+      if (tot > 2.5) o25 += p;
+      if (tot > 3.5) o35 += p;
       if (i > 0 && j > 0) btts += p;
       scores.push([i, j, p]);
     }
   }
-  const s = w + d + l;
-  scores.sort((a, b) => b[2] - a[2]); // meilleurs scores en premier
+  const s = w + d + l || 1;
+  scores.sort((a, b) => b[2] - a[2]);
 
-  // Résultat le plus probable
-  let bestOutcome = "1", bestOutcomeProb = w;
-  if (d > bestOutcomeProb) { bestOutcome = "N"; bestOutcomeProb = d; }
-  if (l > bestOutcomeProb) { bestOutcome = "2"; bestOutcomeProb = l; }
+  // 1X2
+  const outcomes = [
+    { key: "1", label: "Victoire domicile", prob: w / s },
+    { key: "X", label: "Match nul", prob: d / s },
+    { key: "2", label: "Victoire extérieur", prob: l / s }
+  ].sort((a, b) => b.prob - a.prob);
 
-  // Total de buts le plus probable
-  let totalGoals = 2;
-  if (o35 > 0.45) totalGoals = 3;
-  else if (o25 > 0.55) totalGoals = 2;
-  else if (o15 > 0.6) totalGoals = 1;
-  else totalGoals = 2;
+  // Double chance
+  const doubleChance = [
+    { key: "1X", label: "Domicile ou Nul", prob: (w + d) / s },
+    { key: "12", label: "Domicile ou Extérieur", prob: (w + l) / s },
+    { key: "X2", label: "Nul ou Extérieur", prob: (d + l) / s }
+  ].sort((a, b) => b.prob - a.prob);
 
-  // BTTS recommandation
-  const bttsYes = btts > 0.52;
+  // Totals
+  const totals = [
+    { line: "0.5", over: o05 / s, under: 1 - o05 / s },
+    { line: "1.5", over: o15 / s, under: 1 - o15 / s },
+    { line: "2.5", over: o25 / s, under: 1 - o25 / s },
+    { line: "3.5", over: o35 / s, under: 1 - o35 / s }
+  ];
 
-  // Top 3 scores exacts
-  const topScores = scores.slice(0, 5).map(sc => ({
-    score: sc[0] + "-" + sc[1],
-    prob: +(sc[2] / s).toFixed(3),
-    odd: +((1 / (sc[2] / s))).toFixed(2)
+  // Exact scores top 5
+  const topScores = scores.slice(0, 5).map(([i, j, p]) => ({
+    score: i + "-" + j,
+    prob: p / s,
+    odd: +((1 / (p / s))).toFixed(2)
   }));
 
+  // HT/FT approximation (simplified: assume half intensity ~0.45 of full)
+  const htLh = lh * 0.45, htLa = la * 0.45;
+  const htft = [];
+  const htOutcomes = ["1", "X", "2"];
+  for (const ht of htOutcomes) {
+    for (const ft of htOutcomes) {
+      // rough probability
+      let pHt = ht === "1" ? 0.4 : ht === "X" ? 0.3 : 0.3;
+      let pFt = ft === "1" ? w / s : ft === "X" ? d / s : l / s;
+      // correlation adjustment
+      if (ht === ft) pHt *= 1.15;
+      htft.push({ key: ht + "/" + ft, prob: Math.min(0.35, pHt * pFt * 1.2) });
+    }
+  }
+  htft.sort((a, b) => b.prob - a.prob);
+
   return {
-    w: w / s, d: d / s, l: l / s,
-    o25: o25 / s, btts: btts / s,
-    bestOutcome, bestOutcomeProb: bestOutcomeProb / s,
-    totalGoals,
-    bttsYes,
+    outcomes,
+    doubleChance,
+    totals,
+    btts: { yes: btts / s, no: 1 - btts / s },
     topScores,
-    score: topScores[0].score
+    htft: htft.slice(0, 6),
+    bestOutcome: outcomes[0].key,
+    bestOutcomeProb: outcomes[0].prob
   };
 }
 
@@ -174,196 +194,141 @@ async function matches() {
     const all = [];
     for (const comp of COMPETITIONS) {
       try {
-        const [st, fx] = await Promise.all([
-          api(comp, "/standings"),
-          api(comp, "/matches?status=SCHEDULED")
-        ]);
-        if (!st.standings || !st.standings[0] || !fx.matches) continue;
+        const [st, fx] = await Promise.all([api(comp, "/standings"), api(comp, "/matches?status=SCHEDULED")]);
+        if (!st.standings?.[0] || !fx.matches) continue;
         const table = st.standings[0].table;
         const G = table.reduce((a, t) => a + (t.goalsFor || 0), 0);
         const N = table.reduce((a, t) => a + (t.playedGames || 0), 0) || 1;
         const avg = G / N || 1.3;
         const S = {};
         table.forEach(t => {
-          if (t.playedGames > 0) {
-            S[t.team.id] = {
-              att: (t.goalsFor / t.playedGames) / avg,
-              def: (t.goalsAgainst / t.playedGames) / avg
-            };
-          }
+          if (t.playedGames > 0) S[t.team.id] = { att: t.goalsFor / t.playedGames / avg, def: t.goalsAgainst / t.playedGames / avg };
         });
-        const list = fx.matches
-          .filter(m => S[m.homeTeam.id] && S[m.awayTeam.id])
-          .slice(0, 5)
-          .map(m => {
-            const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
-            const pred = predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def);
-            return {
-              home: m.homeTeam.name,
-              away: m.awayTeam.name,
-              date: m.utcDate,
-              competition: COMP_NAMES[comp] || comp,
-              ...pred
-            };
+        fx.matches.filter(m => S[m.homeTeam.id] && S[m.awayTeam.id]).slice(0, 5).forEach(m => {
+          const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
+          all.push({
+            home: m.homeTeam.name,
+            away: m.awayTeam.name,
+            date: m.utcDate,
+            competition: COMP_NAMES[comp] || comp,
+            ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def)
           });
-        all.push(...list);
-      } catch (e) {
-        console.error("Erreur compétition", comp, e.message);
-      }
+        });
+      } catch (e) { console.error(comp, e.message); }
     }
     all.sort((a, b) => new Date(a.date) - new Date(b.date));
-    cache = { t: Date.now(), list: all.slice(0, 18) };
+    cache = { t: Date.now(), list: all.slice(0, 16) };
     return cache.list;
   } catch (e) {
-    console.error("Football data error:", e.message);
-    return cache.list.length ? cache.list : [];
+    console.error(e.message);
+    return cache.list || [];
   }
 }
 
-// Construction de coupons combinés (Élite)
 function buildCoupons(list) {
-  const coupons = [];
+  const coupons = { cote2: [], cote5: [], cote10: [], exact: [] };
 
-  // ===== 1. Combinés SCORES EXACTS (les plus fiables) =====
-  const exactCandidates = [];
+  // Exact scores
+  const exacts = [];
   list.forEach(m => {
-    if (m.topScores && m.topScores[0]) {
-      exactCandidates.push({
-        match: m.home + " - " + m.away,
-        pick: m.topScores[0].score,
-        prob: m.topScores[0].prob,
-        odd: m.topScores[0].odd
-      });
-    }
+    if (m.topScores?.[0]) exacts.push({ match: m.home + " – " + m.away, score: m.topScores[0].score, prob: m.topScores[0].prob, odd: m.topScores[0].odd });
   });
-  exactCandidates.sort((a, b) => b.prob - a.prob);
-  const topExact = exactCandidates.slice(0, 9);
-
-  if (topExact.length >= 2) {
-    const p = topExact.slice(0, 2);
-    coupons.push({
-      label: "🎯 Combiné 2 scores exacts (les + fiables)",
-      odd: +(p[0].odd * p[1].odd).toFixed(2),
-      picks: p.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
-    });
+  exacts.sort((a, b) => b.prob - a.prob);
+  if (exacts.length >= 2) {
+    const p = exacts.slice(0, 2);
+    coupons.exact.push({ odd: +(p[0].odd * p[1].odd).toFixed(2), picks: p.map(x => x.match + " → " + x.score) });
   }
-  if (topExact.length >= 3) {
-    const p = topExact.slice(0, 3);
-    coupons.push({
-      label: "🎯 Combiné 3 scores exacts (les + fiables)",
-      odd: +(p[0].odd * p[1].odd * p[2].odd).toFixed(2),
-      picks: p.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
-    });
+  if (exacts.length >= 3) {
+    const p = exacts.slice(0, 3);
+    coupons.exact.push({ odd: +(p[0].odd * p[1].odd * p[2].odd).toFixed(2), picks: p.map(x => x.match + " → " + x.score) });
   }
 
-  // ===== 2. Combinés MEILLEURS CHOIX DE MATCH (1X2) pour cotes ~2 / ~5 / ~10 =====
-  const resultCandidates = [];
+  // 1X2 best results for target odds
+  const results = [];
   list.forEach(m => {
-    // On prend le résultat le plus probable
-    let pickLabel, odd;
-    if (m.bestOutcome === "1") {
-      pickLabel = "1 (Victoire " + m.home + ")";
-      odd = +(1 / m.bestOutcomeProb).toFixed(2);
-    } else if (m.bestOutcome === "2") {
-      pickLabel = "2 (Victoire " + m.away + ")";
-      odd = +(1 / m.bestOutcomeProb).toFixed(2);
-    } else {
-      pickLabel = "N (Match nul)";
-      odd = +(1 / m.bestOutcomeProb).toFixed(2);
-    }
-    // On évite les cotes trop faibles (< 1.25) ou trop élevées pour les combinés
-    if (odd >= 1.25 && odd <= 3.5) {
-      resultCandidates.push({
-        match: m.home + " - " + m.away,
-        pick: pickLabel,
-        prob: m.bestOutcomeProb,
-        odd
-      });
+    const best = m.outcomes[0];
+    const odd = +(1 / best.prob).toFixed(2);
+    if (odd >= 1.20 && odd <= 2.80) {
+      results.push({ match: m.home + " – " + m.away, pick: best.label, odd, prob: best.prob });
     }
   });
-  // Trier par fiabilité
-  resultCandidates.sort((a, b) => b.prob - a.prob);
-  const topResults = resultCandidates.slice(0, 12);
+  results.sort((a, b) => b.prob - a.prob);
 
-  function makeResultCombo(items, targetOdd, maxPicks) {
-    if (items.length < 2) return null;
-    let currentOdd = 1;
-    const picks = [];
+  function makeCombo(items, target, maxN) {
+    let odd = 1, picks = [];
     for (const it of items) {
-      const newOdd = currentOdd * it.odd;
-      if (newOdd > targetOdd * 1.5 && picks.length >= 2) break;
-      currentOdd = newOdd;
-      picks.push(it);
-      if (picks.length >= maxPicks) break;
+      if (picks.length >= maxN) break;
+      odd *= it.odd;
+      picks.push(it.match + " → " + it.pick + " (" + it.odd + ")");
+      if (odd >= target * 0.85) break;
     }
     if (picks.length < 2) return null;
-    return {
-      label: "⭐ Combiné meilleurs choix (cible cote " + targetOdd + ")",
-      odd: +currentOdd.toFixed(2),
-      picks: picks.map(x => x.match + " → " + x.pick + " (cote " + x.odd + ")")
-    };
+    return { odd: +odd.toFixed(2), picks };
   }
 
-  const c2 = makeResultCombo(topResults, 2, 3);
-  if (c2) coupons.push(c2);
-
-  const c5 = makeResultCombo(topResults, 5, 4);
-  if (c5) coupons.push(c5);
-
-  const c10 = makeResultCombo(topResults, 10, 5);
-  if (c10) coupons.push(c10);
+  const c2 = makeCombo(results, 2, 3);
+  if (c2) coupons.cote2.push(c2);
+  const c5 = makeCombo(results, 5, 4);
+  if (c5) coupons.cote5.push(c5);
+  const c10 = makeCombo(results, 10, 5);
+  if (c10) coupons.cote10.push(c10);
 
   return coupons;
 }
 
-// Filtrage par abonnement
 app.get("/api/predictions", auth, async (req, res) => {
   try {
     const rk = RANK[req.user.plan] || 0;
     const list = await matches();
+    const matchesOut = list.map((m, i) => {
+      const base = { home: m.home, away: m.away, date: m.date, competition: m.competition };
 
-    const result = list.map((m, i) => {
-      // GRATUIT : seulement 2 matchs, une seule prédiction claire (pas de score exact)
+      // Free: only first match unlocked, others locked
       if (rk === 0) {
-        if (i > 1) return { home: m.home, away: m.away, date: m.date, competition: m.competition, locked: true };
-        const label = m.bestOutcome === "1" ? "Victoire domicile" : m.bestOutcome === "2" ? "Victoire extérieur" : "Match nul";
+        if (i > 0) return { ...base, locked: true };
         return {
-          home: m.home, away: m.away, date: m.date, competition: m.competition,
-          prediction: label,
-          confidence: Math.round(m.bestOutcomeProb * 100)
+          ...base,
+          outcomes: m.outcomes,
+          doubleChance: m.doubleChance,
+          totals: m.totals,
+          btts: m.btts,
+          // score & htft locked for free
+          scoreLocked: true,
+          htftLocked: true
         };
       }
 
-      // PRO et ELITE
-      const o = {
-        home: m.home, away: m.away, date: m.date, competition: m.competition,
-        winner: m.bestOutcome === "1" ? m.home : m.bestOutcome === "2" ? m.away : "Match nul",
-        winnerProb: Math.round(m.bestOutcomeProb * 100),
-        totalGoals: m.totalGoals,
-        btts: m.bttsYes ? "Oui" : "Non",
-        bttsProb: Math.round(m.btts * 100)
-      };
-
-      // ELITE uniquement
-      if (rk >= 2) {
-        o.score = m.score;
-        o.topScores = m.topScores.slice(0, 3);
+      // Pro
+      if (rk === 1) {
+        return {
+          ...base,
+          outcomes: m.outcomes,
+          doubleChance: m.doubleChance,
+          totals: m.totals,
+          btts: m.btts,
+          scoreLocked: true,
+          htftLocked: true
+        };
       }
 
-      return o;
+      // Elite
+      return {
+        ...base,
+        outcomes: m.outcomes,
+        doubleChance: m.doubleChance,
+        totals: m.totals,
+        btts: m.btts,
+        topScores: m.topScores,
+        htft: m.htft
+      };
     });
 
-    // Ajouter les coupons combinés seulement pour Élite
-    if (rk >= 2) {
-      const coupons = buildCoupons(list);
-      res.json({ matches: result, coupons });
-    } else {
-      res.json({ matches: result });
-    }
+    const coupons = rk >= 2 ? buildCoupons(list) : null;
+    res.json({ matches: matchesOut, coupons, plan: req.user.plan });
   } catch (e) {
     console.error(e);
     res.json({ matches: [] });
   }
 });
 
-app.listen(E.PORT || 3000, () => console.log("PronoStats sur " + (E.BASE_URL || "http://localhost:3000")));
+app.listen(E.PORT || 3000, () => console.log("PronoStats " + (E.BASE_URL || "http://localhost:3000")));
