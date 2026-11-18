@@ -220,9 +220,8 @@ async function matches() {
   }
 }
 
-// Construction de coupons combinés (Élite)
+// Construction de coupons combinés (Élite) - scores exacts les plus fiables
 function buildCoupons(list) {
-  // On prend les scores exacts les plus fiables (probabilité élevée)
   const candidates = [];
   list.forEach(m => {
     if (m.topScores && m.topScores[0]) {
@@ -235,42 +234,44 @@ function buildCoupons(list) {
       });
     }
   });
-  // Trier par fiabilité (probabilité)
+  // Trier par fiabilité (plus haute probabilité = plus fiable)
   candidates.sort((a, b) => b.prob - a.prob);
-  const top = candidates.slice(0, 8);
+  const top = candidates.slice(0, 9);
 
   const coupons = [];
 
-  // Fonction pour créer un combiné
-  function makeCombo(items, targetOdd) {
-    if (items.length < 2) return null;
-    let odd = 1;
-    const picks = [];
-    for (const it of items) {
-      if (odd * it.odd > targetOdd * 1.4) break;
-      odd *= it.odd;
-      picks.push(it);
-      if (picks.length >= 3) break;
-    }
-    if (picks.length < 2) return null;
-    return {
-      target: targetOdd,
-      odd: +odd.toFixed(2),
-      picks: picks.map(p => p.match + " → " + p.score)
-    };
+  // Combiné de 2 scores exacts les plus fiables
+  if (top.length >= 2) {
+    const p = top.slice(0, 2);
+    const odd = +(p[0].odd * p[1].odd).toFixed(2);
+    coupons.push({
+      label: "Combiné 2 scores exacts (les + fiables)",
+      odd,
+      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
+    });
   }
 
-  // Cote ~2
-  const c2 = makeCombo(top.slice(0, 4), 2);
-  if (c2) coupons.push(c2);
+  // Combiné de 3 scores exacts les plus fiables
+  if (top.length >= 3) {
+    const p = top.slice(0, 3);
+    const odd = +(p[0].odd * p[1].odd * p[2].odd).toFixed(2);
+    coupons.push({
+      label: "Combiné 3 scores exacts (les + fiables)",
+      odd,
+      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
+    });
+  }
 
-  // Cote ~5
-  const c5 = makeCombo(top.slice(0, 6), 5);
-  if (c5) coupons.push(c5);
-
-  // Cote ~10
-  const c10 = makeCombo(top, 10);
-  if (c10) coupons.push(c10);
+  // Autre combiné de 2 avec les suivants
+  if (top.length >= 4) {
+    const p = top.slice(2, 4);
+    const odd = +(p[0].odd * p[1].odd).toFixed(2);
+    coupons.push({
+      label: "Combiné 2 scores exacts (alternatif)",
+      odd,
+      picks: p.map(x => x.match + " → " + x.score + " (cote " + x.odd + ")")
+    });
+  }
 
   return coupons;
 }
