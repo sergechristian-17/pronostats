@@ -14,9 +14,8 @@ function saveDB(db) { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
 let db = loadDB();
 
 const app = express(), RANK = { free: 0, pro: 1, elite: 2 };
-
-// Liste des compétitions (gratuite sur football-data.org)
 const COMPETITIONS = ["FL1", "PL", "PD", "SA", "BL1", "CL"];
+const COMP_NAMES = { FL1: "Ligue 1", PL: "Premier League", PD: "La Liga", SA: "Serie A", BL1: "Bundesliga", CL: "Champions League" };
 
 // Stripe webhook
 app.post("/api/webhook", express.raw({ type: "application/json" }), (req, res) => {
@@ -72,17 +71,16 @@ app.get("/api/me", auth, (req, res) => {
   res.json({ email: req.user.email, plan: req.user.plan });
 });
 
-// TEMPORAIRE - pour tester Pro/Élite (à supprimer plus tard)
+// TEMPORAIRE - pour tester
 app.post("/api/force-elite", (req, res) => {
   const { email, secret } = req.body || {};
   if (secret !== "pronostats-test-2026") return res.status(403).json({ error: "Interdit" });
   const u = db.users.find(x => x.email === (email || "").toLowerCase());
-  if (!u) return res.status(404).json({ error: "Compte introuvable. Crée d\'abord un compte." });
+  if (!u) return res.status(404).json({ error: "Compte introuvable. Crée d'abord un compte." });
   u.plan = "elite";
   saveDB(db);
   res.json({ ok: true, email: u.email, plan: u.plan });
 });
-
 
 app.post("/api/checkout", auth, async (req, res) => {
   const plan = req.body.plan === "elite" ? "elite" : "pro";
@@ -110,7 +108,7 @@ app.post("/api/portal", auth, async (req, res) => {
   res.json({ url: s.url });
 });
 
-// ---------- Données multi-compétitions + modèle de Poisson ----------
+// ---------- Modèle de Poisson enrichi ----------
 const api = (comp, p) => fetch("https://api.football-data.org/v4/competitions/" + comp + p,
   { headers: { "X-Auth-Token": E.FOOTBALL_DATA_KEY } }).then(r => {
     if (!r.ok) throw new Error("API " + comp + " status " + r.status);
@@ -118,22 +116,60 @@ const api = (comp, p) => fetch("https://api.football-data.org/v4/competitions/" 
   });
 
 const pois = (l, k) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
+
 function predict(lh, la) {
-  let w = 0, d = 0, l = 0, o = 0, b = 0, best = [0, 0, 0];
-  for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
-    const p = pois(lh, i) * pois(la, j);
-    i > j ? w += p : i == j ? d += p : l += p;
-    if (i + j > 2) o += p; if (i && j) b += p; if (p > best[2]) best = [i, j, p];
+  let w = 0, d = 0, l = 0, o15 = 0, o25 = 0, o35 = 0, btts = 0;
+  const scores = []; // [homeGoals, awayGoals, prob]
+  for (let i = 0; i <= 7; i++) {
+    for (let j = 0; j <= 7; j++) {
+      const p = pois(lh, i) * pois(la, j);
+      if (i > j) w += p; else if (i === j) d += p; else l += p;
+      if (i + j > 1.5) o15 += p;
+      if (i + j > 2.5) o25 += p;
+      if (i + j > 3.5) o35 += p;
+      if (i > 0 && j > 0) btts += p;
+      scores.push([i, j, p]);
+    }
   }
   const s = w + d + l;
-  return { w: w / s, d: d / s, l: l / s, o25: o / s, btts: b / s, score: best[0] + "-" + best[1] };
-}
+  scores.sort((a, b) => b[2] - a[2]); // meilleurs scores en premier
 
-const COMP_NAMES = { FL1: "Ligue 1", PL: "Premier League", PD: "La Liga", SA: "Serie A", BL1: "Bundesliga", CL: "Champions League" };
+  // Résultat le plus probable
+  let bestOutcome = "1", bestOutcomeProb = w;
+  if (d > bestOutcomeProb) { bestOutcome = "N"; bestOutcomeProb = d; }
+  if (l > bestOutcomeProb) { bestOutcome = "2"; bestOutcomeProb = l; }
+
+  // Total de buts le plus probable
+  let totalGoals = 2;
+  if (o35 > 0.45) totalGoals = 3;
+  else if (o25 > 0.55) totalGoals = 2;
+  else if (o15 > 0.6) totalGoals = 1;
+  else totalGoals = 2;
+
+  // BTTS recommandation
+  const bttsYes = btts > 0.52;
+
+  // Top 3 scores exacts
+  const topScores = scores.slice(0, 5).map(sc => ({
+    score: sc[0] + "-" + sc[1],
+    prob: +(sc[2] / s).toFixed(3),
+    odd: +((1 / (sc[2] / s))).toFixed(2)
+  }));
+
+  return {
+    w: w / s, d: d / s, l: l / s,
+    o25: o25 / s, btts: btts / s,
+    bestOutcome, bestOutcomeProb: bestOutcomeProb / s,
+    totalGoals,
+    bttsYes,
+    topScores,
+    score: topScores[0].score
+  };
+}
 
 let cache = { t: 0, list: [] };
 async function matches() {
-  if (Date.now() - cache.t < 1800e3 && cache.list.length) return cache.list; // cache 30 min
+  if (Date.now() - cache.t < 1800e3 && cache.list.length) return cache.list;
   try {
     const all = [];
     for (const comp of COMPETITIONS) {
@@ -158,15 +194,16 @@ async function matches() {
         });
         const list = fx.matches
           .filter(m => S[m.homeTeam.id] && S[m.awayTeam.id])
-          .slice(0, 6)
+          .slice(0, 5)
           .map(m => {
             const h = S[m.homeTeam.id], a = S[m.awayTeam.id];
+            const pred = predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def);
             return {
               home: m.homeTeam.name,
               away: m.awayTeam.name,
               date: m.utcDate,
               competition: COMP_NAMES[comp] || comp,
-              ...predict(avg * 1.12 * h.att * a.def, avg * a.att * h.def)
+              ...pred
             };
           });
         all.push(...list);
@@ -174,9 +211,8 @@ async function matches() {
         console.error("Erreur compétition", comp, e.message);
       }
     }
-    // Trier par date
     all.sort((a, b) => new Date(a.date) - new Date(b.date));
-    cache = { t: Date.now(), list: all.slice(0, 20) }; // max 20 matchs
+    cache = { t: Date.now(), list: all.slice(0, 18) };
     return cache.list;
   } catch (e) {
     console.error("Football data error:", e.message);
@@ -184,22 +220,108 @@ async function matches() {
   }
 }
 
-// Filtrage par abonnement (logique inchangée)
+// Construction de coupons combinés (Élite)
+function buildCoupons(list) {
+  // On prend les scores exacts les plus fiables (probabilité élevée)
+  const candidates = [];
+  list.forEach(m => {
+    if (m.topScores && m.topScores[0]) {
+      candidates.push({
+        match: m.home + " - " + m.away,
+        score: m.topScores[0].score,
+        prob: m.topScores[0].prob,
+        odd: m.topScores[0].odd,
+        competition: m.competition
+      });
+    }
+  });
+  // Trier par fiabilité (probabilité)
+  candidates.sort((a, b) => b.prob - a.prob);
+  const top = candidates.slice(0, 8);
+
+  const coupons = [];
+
+  // Fonction pour créer un combiné
+  function makeCombo(items, targetOdd) {
+    if (items.length < 2) return null;
+    let odd = 1;
+    const picks = [];
+    for (const it of items) {
+      if (odd * it.odd > targetOdd * 1.4) break;
+      odd *= it.odd;
+      picks.push(it);
+      if (picks.length >= 3) break;
+    }
+    if (picks.length < 2) return null;
+    return {
+      target: targetOdd,
+      odd: +odd.toFixed(2),
+      picks: picks.map(p => p.match + " → " + p.score)
+    };
+  }
+
+  // Cote ~2
+  const c2 = makeCombo(top.slice(0, 4), 2);
+  if (c2) coupons.push(c2);
+
+  // Cote ~5
+  const c5 = makeCombo(top.slice(0, 6), 5);
+  if (c5) coupons.push(c5);
+
+  // Cote ~10
+  const c10 = makeCombo(top, 10);
+  if (c10) coupons.push(c10);
+
+  return coupons;
+}
+
+// Filtrage par abonnement
 app.get("/api/predictions", auth, async (req, res) => {
   try {
     const rk = RANK[req.user.plan] || 0;
-    const odd = x => +(1 / x).toFixed(2);
     const list = await matches();
-    res.json(list.map((m, i) => {
-      if (rk === 0 && i > 1) return { home: m.home, away: m.away, date: m.date, competition: m.competition, locked: true };
-      const o = { home: m.home, away: m.away, date: m.date, competition: m.competition, w: m.w, d: m.d, l: m.l };
-      if (rk >= 1) { o.o25 = m.o25; o.btts = m.btts; }
-      if (rk >= 2) { o.score = m.score; o.odds = [odd(m.w), odd(m.d), odd(m.l)]; }
+
+    const result = list.map((m, i) => {
+      // GRATUIT : seulement 2 matchs, une seule prédiction claire (pas de score exact)
+      if (rk === 0) {
+        if (i > 1) return { home: m.home, away: m.away, date: m.date, competition: m.competition, locked: true };
+        const label = m.bestOutcome === "1" ? "Victoire domicile" : m.bestOutcome === "2" ? "Victoire extérieur" : "Match nul";
+        return {
+          home: m.home, away: m.away, date: m.date, competition: m.competition,
+          prediction: label,
+          confidence: Math.round(m.bestOutcomeProb * 100)
+        };
+      }
+
+      // PRO et ELITE
+      const o = {
+        home: m.home, away: m.away, date: m.date, competition: m.competition,
+        winner: m.bestOutcome === "1" ? m.home : m.bestOutcome === "2" ? m.away : "Match nul",
+        winnerProb: Math.round(m.bestOutcomeProb * 100),
+        totalGoals: m.totalGoals,
+        btts: m.bttsYes ? "Oui" : "Non",
+        bttsProb: Math.round(m.btts * 100)
+      };
+
+      // ELITE uniquement
+      if (rk >= 2) {
+        o.score = m.score;
+        o.topScores = m.topScores.slice(0, 3);
+      }
+
       return o;
-    }));
+    });
+
+    // Ajouter les coupons combinés seulement pour Élite
+    if (rk >= 2) {
+      const coupons = buildCoupons(list);
+      res.json({ matches: result, coupons });
+    } else {
+      res.json({ matches: result });
+    }
   } catch (e) {
     console.error(e);
-    res.json([]);
+    res.json({ matches: [] });
   }
 });
 
